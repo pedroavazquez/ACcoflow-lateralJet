@@ -1,0 +1,40 @@
+# build artifacts
+*.o
+*.so
+*.a
+*.exe
+*.out
+*.deps
+*.tst
+*.tests
+*.s
+*_fresh
+*_restore
+
+# Basilisk / simulation outputs (adjust to your case)
+log
+*.log
+*.dump
+*.gfs
+*.vtk
+*.vtu
+*.pvtu
+*.pvd
+*.png
+*.mp4
+*.mov
+*.dat
+dump*
+out*
+*.txt
+
+# large raw data / restart files (if any)
+output/
+results/
+restart/
+tmp/
+lateralJet_params/
+
+# editor / OS
+.vscode/
+.DS_Store
