@@ -85,7 +85,8 @@ typedef struct {
 	double R2;          // radius of channel and size of box
 	double LIN;         // size of radial inlet for outer liquid
 	double LBOX;        // size of one box
-
+	
+	double XNEUMANN;    // max x where top phi BC uses Neumann
 	char DUMP_FILE[256]; // name of dump file for restore
 
 	// Electrical properties
@@ -142,6 +143,7 @@ void init_default_params(SimParams *p) {
 	p->R1 = 1.0;
 	p->R2 = 1.0;
 	p->LIN = 1.0;       // will be set to R2 if not specified
+	p->XNEUMANN = -1.0; // will be set to LIN if not specified
 	p->LBOX = 1.0;      // will be set to R2 if not specified
 
 	strcpy(p->DUMP_FILE, "dump");  // default dump file name
@@ -186,6 +188,9 @@ void apply_compile_time_overrides(SimParams *p) {
 	#endif
 	#ifdef _R2
 	p->R2 = _R2;
+	#endif
+	#ifdef _XNEUMANN
+	p->XNEUMANN = _XNEUMANN;
 	#endif
 	#ifdef _EPSR1
 	p->EPSR1 = _EPSR1;
@@ -252,6 +257,7 @@ void apply_compile_time_overrides(SimParams *p) {
 void compute_derived_params(SimParams *p) {
 	// Set dependent geometry defaults
 	if (p->LIN <= 0) p->LIN = p->R2;
+	if (p->XNEUMANN <= 0) p->XNEUMANN = 2.*p->LIN;
 	if (p->LBOX <= 0) p->LBOX = p->R2;
 
 	// Compute derived quantities
@@ -284,6 +290,7 @@ int save_params(const char *filename, const SimParams *p) {
 	fprintf(fp, "R1 = %.15e\n", p->R1);
 	fprintf(fp, "R2 = %.15e\n", p->R2);
 	fprintf(fp, "LIN = %.15e\n", p->LIN);
+	fprintf(fp, "XNEUMANN = %.15e\n", p->XNEUMANN);
 	fprintf(fp, "LBOX = %.15e\n", p->LBOX);
 
 	fprintf(fp, "\n# Electrical properties\n");
@@ -349,6 +356,7 @@ int load_params(const char *filename, SimParams *p) {
 			if (strcmp(name, "R1") == 0) p->R1 = value;
 			else if (strcmp(name, "R2") == 0) p->R2 = value;
 			else if (strcmp(name, "LIN") == 0) p->LIN = value;
+			else if (strcmp(name, "XNEUMANN") == 0) p->XNEUMANN = value;
 			else if (strcmp(name, "LBOX") == 0) p->LBOX = value;
 			else if (strcmp(name, "EPSR1") == 0) p->EPSR1 = value;
 			else if (strcmp(name, "EPSR2") == 0) p->EPSR2 = value;
@@ -392,6 +400,7 @@ void print_params(const SimParams *p) {
 	fprintf(stdout, "# R1      = %g\n", p->R1);
 	fprintf(stdout, "# R2      = %g\n", p->R2);
 	fprintf(stdout, "# LIN     = %g\n", p->LIN);
+	fprintf(stdout, "# XNEUMANN = %g\n", p->XNEUMANN);
 	fprintf(stdout, "# LBOX    = %g\n", p->LBOX);
 	fprintf(stdout, "# LX      = %g\n", LX);
 	fprintf(stdout, "# EPSR1   = %g\n", p->EPSR1);
@@ -475,22 +484,26 @@ double computeBOE ( double t ) {
 		return 0.0;
 	else if (t < 30)
 		return 5.0;
-	else if (t < 40)
-		return 10.0;
 	else if (t < 50)
-		return 20.0;
-	else if (t < 60)
-		return 50.0;
+		return 10.0;
 	else if (t < 70)
-		return 100.0;
-	else if (t < 80)
-		return 200.0;
+		return 20.0;
 	else if (t < 90)
+		return 50.0;
+	else if (t < 110)
+		return 100.0;
+	else if (t < 140)
+		return 200.0;
+	else if (t < 170)
 		return 300.0;
-	else if (t < 100)
+	else if (t < 200)
 		return 400.0;
-	else
+	else if (t < 230)
 		return 500.0;
+	else if (t < 260)
+		return 600.0;
+	else // t < 300
+		return 800.0;
 }
 
 /*
@@ -540,11 +553,11 @@ phiI[right] = neumann(0);
 phiR[bottom] = neumann(0);
 phiI[bottom] = neumann(0);
 #if DI
-phiR[top] = (x <= params.LIN ? neumann(0) : robin(AR, BR, CR));
-phiI[top] = (x <= params.LIN ? neumann(0.) : robin(AI, BI, CI));
+phiR[top] = (x <= params.XNEUMANN ? neumann(0) : robin(AR, BR, CR));
+phiI[top] = (x <= params.XNEUMANN ? neumann(0.) : robin(AI, BI, CI));
 #else
-phiR[top] = (x <= params.LIN ? neumann(0) : dirichlet(params.V0));
-phiI[top] = (x <= params.R2 ? neumann(0) : dirichlet(0));
+phiR[top] = (x <= params.XNEUMANN ? neumann(0) : dirichlet(params.V0));
+phiI[top] = (x <= params.XNEUMANN ? neumann(0) : dirichlet(0));
 #endif
 
 f[left] = (y < params.R1 ? 1.0 : 0.);
@@ -867,7 +880,7 @@ event snapshots ( i++ )
 		return 0;  // Past end time
 
 	char label[200];
-	view( tx = -1.5, ty = -0.3, sx = 4.0, sy = 8.0, width = 1200, height = 300 );
+	view( tx = -1.5, ty = -0.3, sx = 4.0, sy = 40.0, width = 1200, height = 300 );
 
 	// u.x
 	box();
