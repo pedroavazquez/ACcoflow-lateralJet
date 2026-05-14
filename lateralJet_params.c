@@ -17,19 +17,22 @@
 		LEVEL     = initial refinement level
 		ELECTRIC  = 1 enable electric field; 0 disable
 		DI        = 1 use Robin/impedance BC at top; 0 use Dirichlet
-		RESTORE   = 1 restart from dump (reads params.txt); 0 fresh run
+		RESTORE   = default restart mode; can be overridden at runtime
 
 	Runtime parameters:
 	- Stored in params.txt and read on restore runs.
 	- Can be overridden at build time with -D_XXX=value (see apply_compile_time_overrides).
-	- You can pass a parameter file at runtime:
+	- Runtime options:
 	    ./lateralJet_params [params.txt]
+	    ./lateralJet_params --restore [params.txt]
+	    ./lateralJet_params --fresh [params.txt]
+	    ./lateralJet_params --restore --dump dump-000000070.0000
 
 	Typical workflow:
-	1) Fresh run (RESTORE=0, default):
+	1) Fresh run:
 	   - Parameters initialized from defaults and -D_ overrides.
 	   - params.txt is written for record/restart.
-	2) Restart run (RESTORE=1 at compile time):
+	2) Restart run:
 	   - params.txt is read, and DUMP_FILE is used to restore the latest dump.
 	   - params.txt is updated with the newest dump name.
 
@@ -124,6 +127,7 @@ typedef struct {
 
 // Global parameters instance
 SimParams params;
+int restore_run = RESTORE;
 
 // Derived quantities (computed from params)
 double EPSA1, EPSA2;    // absolute permittivities
@@ -397,6 +401,7 @@ void print_params(const SimParams *p) {
 	fprintf(stdout, "# ===== Simulation Parameters =====\n");
 	fprintf(stdout, "# Compile-time: NX=%d, LEVEL=%d, ELECTRIC=%d, DI=%d\n",
 	        NX, LEVEL, ELECTRIC, DI);
+	fprintf(stdout, "# Runtime restore mode = %d\n", restore_run);
 	fprintf(stdout, "# R1      = %g\n", p->R1);
 	fprintf(stdout, "# R2      = %g\n", p->R2);
 	fprintf(stdout, "# LIN     = %g\n", p->LIN);
@@ -586,18 +591,45 @@ int main (int argc, char * argv[])
 	// Apply compile-time overrides (if any -D_PARAM=value flags were used)
 	apply_compile_time_overrides(&params);
 
-	// Handle command line argument for params file
+	// Handle command line options.
 	const char *params_file = "params.txt";
-	if (argc > 1) {
-		params_file = argv[1];
+	const char *dump_file_override = NULL;
+	for (int a = 1; a < argc; a++) {
+		if (strcmp(argv[a], "--restore") == 0 || strcmp(argv[a], "-r") == 0) {
+			restore_run = 1;
+		} else if (strcmp(argv[a], "--fresh") == 0) {
+			restore_run = 0;
+		} else if (strcmp(argv[a], "--params") == 0 || strcmp(argv[a], "-p") == 0) {
+			if (++a >= argc) {
+				fprintf(stderr, "Usage: %s [--restore|--fresh] [--params params.txt] [--dump dump-file]\n", argv[0]);
+				return 1;
+			}
+			params_file = argv[a];
+		} else if (strcmp(argv[a], "--dump") == 0 || strcmp(argv[a], "-d") == 0) {
+			if (++a >= argc) {
+				fprintf(stderr, "Usage: %s [--restore|--fresh] [--params params.txt] [--dump dump-file]\n", argv[0]);
+				return 1;
+			}
+			dump_file_override = argv[a];
+		} else if (argv[a][0] == '-') {
+			fprintf(stderr, "Unknown option: %s\n", argv[a]);
+			fprintf(stderr, "Usage: %s [--restore|--fresh] [--params params.txt] [--dump dump-file]\n", argv[0]);
+			return 1;
+		} else {
+			params_file = argv[a];
+		}
 	}
 
 	// Always load parameters from file if it exists.
 	// For fresh runs this picks up values set by external scripts (e.g. sweep_boe.py).
 	// For restore runs this is essential to recover the previous state.
-	if (load_params(params_file, &params) != 0 && RESTORE) {
-		fprintf(stderr, "Error: RESTORE=1 but could not load %s\n", params_file);
+	if (load_params(params_file, &params) != 0 && restore_run) {
+		fprintf(stderr, "Error: restore mode requested but could not load %s\n", params_file);
 		return 1;
+	}
+	if (dump_file_override) {
+		strncpy(params.DUMP_FILE, dump_file_override, sizeof(params.DUMP_FILE) - 1);
+		params.DUMP_FILE[sizeof(params.DUMP_FILE) - 1] = '\0';
 	}
 
 	// Compute derived quantities
@@ -607,7 +639,7 @@ int main (int argc, char * argv[])
 	print_params(&params);
 
 	// Save parameters (useful for fresh runs, overwrites for restore)
-	if (!RESTORE && pid() == 0) {
+	if (!restore_run && pid() == 0) {
 		save_params(params_file, &params);
 	}
 
@@ -637,7 +669,7 @@ event init ( t = 0 )
 
 	fprintf(stdout, "# delMax  = %g\n\n", delMax);
 
-	if (!RESTORE) {
+	if (!restore_run) {
 		// Start from scratch
 		foreach() {
 			u.x[] = 0.;
@@ -663,7 +695,7 @@ event init ( t = 0 )
 
 	// Initialize timing for dumps and snapshots
 	// For restore runs, calculate next times based on current t
-	if (RESTORE && t > 0) {
+	if (restore_run && t > 0) {
 		t_next_dump = (floor(t / params.DTDUMP) + 1) * params.DTDUMP;
 		t_next_snapshot = (floor(t / params.DTOUT) + 1) * params.DTOUT;
 	} else {
@@ -705,6 +737,9 @@ event front ( i += 1 ) {
 
 #if ELECTRIC
 event electricAC ( i++ ) {
+	if (t <= params.TELEC)
+		return 0;
+
 	foreach_face() {
 		double f0 = 0.5*(f[] + f[-1]);
 		sigma.x[] = sig(f0);
@@ -749,8 +784,11 @@ event electricAC ( i++ ) {
 }
 
 event acceleration (i++) {
+	if (t <= params.TELEC)
+		return 0;
+
 	// Update BOE and FORCE based on current time
-	params.BOE = computeBOE(t);
+	//params.BOE = computeBOE(t);
 	FORCE = 2.0 * params.BOE / params.CA2;
 
 	assert (dimension <= 2);
@@ -793,11 +831,9 @@ event acceleration (i++) {
 	}
 #endif
 
-	if (t > params.TELEC) {
-		face vector av = a;
-		foreach_face()
-			av.x[] += FORCE*(alpha.x[]/fm.x[]*(f_vec.x[] + f_vec.x[-1])/2.);
-	}
+	face vector av = a;
+	foreach_face()
+		av.x[] += FORCE*(alpha.x[]/fm.x[]*(f_vec.x[] + f_vec.x[-1])/2.);
 
 	foreach()
 		foreach_dimension() {
@@ -880,7 +916,7 @@ event snapshots ( i++ )
 		return 0;  // Past end time
 
 	char label[200];
-	view( tx = -1.5, ty = -0.3, sx = 4.0, sy = 40.0, width = 1200, height = 300 );
+	view( tx = -1.5, ty = -0.3, sx = 4.0, sy = 10.0, width = 1200, height = 300 );
 
 	// u.x
 	box();

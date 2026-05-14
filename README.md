@@ -1,69 +1,126 @@
-# Lateral Jet (multigrid, viscous scales)
+# AC Co-flow Lateral Jet (Nondimensional, Multigrid)
 
-Axisymmetric, two-phase immersed coflow jet simulation using Basilisk multigrid,
-with optional AC electric field coupling. This directory contains the main
-simulation, a reader for parameterized restarts, and a small sweep helper.
+This folder contains the Basilisk C simulation for an axisymmetric immersed co-flow jet with optional AC electric forcing, plus Python and C utilities for postprocessing generated data.
 
-## Files
-- `lateralJet_params.c`: Main simulation with parameter file I/O and
-  compile-time overrides. Supports fresh runs and restarts.
-- `readlateralJet_params.c`: Variant focused on restore runs with parameters
-  loaded from a text file.
-- `drop_stat.h`, `poisson_complex.h`: Support headers for statistics and
-  complex Poisson solves used by the electric model.
-- `Makefile`: Minimal Basilisk build include.
-- `params-00.txt`: Example parameter file template.
-- `sweep_boe.py`: BOE sweep runner with sequential restarts.
+## Contents
 
-## Build
-The code is compiled with Basilisk `qcc` and MPI. A typical build line is:
+### Core simulation (C/Basilisk)
+
+- `lateralJet_params.c`: main simulation code with runtime parameters in `params.txt` and support for fresh/restore runs.
+- `lateralJet_params/params.txt`: example runtime parameter file used by restart and sweep workflows.
+- `drop_stat.h`, `poisson_complex.h`: helper headers used by the simulation.
+- `Makefile`: includes Basilisk build defaults.
+
+### Postprocessing (C)
+
+- `lateralJet_postprocess.c`: loads params, restores a selected dump, and initializes postprocessing context.
+
+### Postprocessing (Python)
+
+- `postprocess.py`: orchestrates common postprocessing actions from one CLI.
+- `interpolate_fields.py`: parses regular-grid field files (`fields.dat`) and builds interpolants.
+- `vtk_export.py`: exports scalar/vector fields to legacy VTK for ParaView.
+- `fields_to_vtk.py`: small CLI wrapper around `vtk_export.py`.
+- `axis_fields.py`: samples all fields along axis `y = 0`.
+- `radial_lines.py`: exports field profiles along radial lines for selected `x` positions.
+- `profiles.py`: computes/saves/plots average velocity and local BOE profiles.
+- `radius_from_facets.py`: computes radius profile `R(x)` from Basilisk facets files.
+- `sweep_boe.py`: automates BOE parameter sweeps using sequential restarts.
+
+## Requirements
+
+### Simulation
+
+- Basilisk with `qcc`
+- MPI compiler/runtime (`mpicc`, `mpirun`)
+- Environment variable `BASILISK` configured
+
+### Python tools
+
+- Python 3.10+
+- `numpy`
+- `matplotlib` (for plots)
+- `scipy` (optional; scripts include fallbacks for interpolation)
+
+Install Python dependencies with:
 
 ```bash
-CC='mpicc -D_MPI=_ -DNX=_ -DLEVEL=_ -DELECTRIC=_ -DDI=_' make lateralJet_params.tst
+pip install numpy matplotlib scipy
 ```
 
-For `sweep_boe.py`, the script builds two binaries (fresh and restore) using:
+## Typical workflow
 
-```
-qcc -DRESTORE=0 ... -o lateralJet_params_fresh
-qcc -DRESTORE=1 ... -o lateralJet_params_restore
-```
+### 1) Run simulation
 
-### Compile-time options
-These are fixed at build time (via `-D` flags):
-- `NX`: number of boxes in x (must equal MPI ranks).
-- `LEVEL`: initial refinement level.
-- `ELECTRIC`: `1` enable electric field; `0` disable.
-- `DI`: `1` use distributed impedance (Robin) boundary; `0` Dirichlet.
-- `RESTORE`: `1` start from dump; `0` fresh run. (Used in `lateralJet_params.c`.)
+Compile and run the main solver according to your local Basilisk setup and parameters.
 
-You can also override selected runtime parameters at compile time with
-`-D_XXX=value` (see `apply_compile_time_overrides` in the `.c` files).
+`lateralJet_params.c` supports:
 
-## Runtime parameters
-Parameters are stored in a `params.txt`-style file and read at runtime:
+- fresh run: `./lateralJet_params [params.txt]`
+- forced restore: `./lateralJet_params --restore [params.txt]`
+- forced fresh: `./lateralJet_params --fresh [params.txt]`
+- explicit dump: `./lateralJet_params --restore --dump dump-... [params.txt]`
 
-```
-./lateralJet_params [params.txt]
+### 2) Build radius profile from facets (optional but common)
+
+```bash
+python radius_from_facets.py --facets-input facets --output radius_profile.dat
 ```
 
-Key parameters (see `params-00.txt` for a full list):
-- Geometry: `R1`, `R2`, `LIN`, `LBOX`
-- Electrical: `EPSR1`, `EPSR2`, `SIGMA1`, `SIGMA2`, `CL`
-- Viscosity: `MU1`, `MU2`, `OH1`, `OH2`
-- Capillary: `CA1`, `CA2`
-- Electric field: `FREQ`, `BOE`, `TELEC`, `V0`
-- Surface tension: `GAMMA`
-- Time control: `TEND`, `DTOUT`, `DTDUMP`, `DTMAXMINE`
-- Restore: `DUMP_FILE` (path to latest dump for restart)
+### 3) Export fields to VTK
 
-## Sweep helper
-`sweep_boe.py` runs a sequential BOE sweep:
+```bash
+python fields_to_vtk.py \
+  --fields-input output_field/fields.dat \
+  --output-dir post \
+  --vtk-output all_fields.vtk
+```
+
+### 4) Extract axis fields
+
+```bash
+python axis_fields.py \
+  --fields-input output_field/fields.dat \
+  --output post/axis_fields.dat
+```
+
+### 5) Run combined Python postprocessing
+
+```bash
+python postprocess.py \
+  --fields-input output_field/fields.dat \
+  --radius-input radius_profile.dat \
+  --output-dir post \
+  --plot-radius \
+  --plot-radial-lines \
+  --export-all-fields-vtk
+```
+
+## BOE sweep workflow
+
+Run a sequential BOE sweep (first case fresh, subsequent cases restored from previous dump):
 
 ```bash
 python sweep_boe.py --np 4 --level 10
 ```
 
-It creates one folder per BOE value under `sweep_boe/`, uses a base `params.txt`
-template, and restarts each case from the previous dump. Use `--no-build` to
-skip compilation.
+Options:
+
+- `--no-build`: skip compilation and reuse existing executables
+- `--np`: MPI ranks (also used as `NX` in this workflow)
+- `--level`: initial refinement level
+
+Outputs are stored under `sweep_boe/boe_*`.
+
+## Input/Output conventions
+
+- `fields.dat` is expected to be a regular `(x, y)` grid with a header containing column names.
+- VTK output is legacy ASCII `STRUCTURED_POINTS`, readable by ParaView.
+- Radius profile files use two columns: `x R(x)`.
+
+## Notes
+
+- Current Python orchestrator `postprocess.py` imports a module named `radius`.
+  If your codebase only has `radius_from_facets.py`, keep compatibility by either:
+  1) adding a small `radius.py` adapter, or
+  2) updating imports in `postprocess.py` to use `radius_from_facets` APIs.
