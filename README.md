@@ -22,6 +22,7 @@ This folder contains the Basilisk C simulation for an axisymmetric immersed co-f
 - `vtk_export.py`: exports scalar/vector fields to legacy VTK for ParaView.
 - `fields_to_vtk.py`: small CLI wrapper around `vtk_export.py`.
 - `axis_fields.py`: samples all fields along axis `y = 0`.
+- `fit_phiR_axis.py`: fits `1 - phiR` along the symmetry axis and estimates `Delta` using `Lj` from the first axis point where `f < 0.5`.
 - `radial_lines.py`: exports field profiles along radial lines for selected `x` positions.
 - `profiles.py`: computes/saves/plots average velocity and local BOE profiles.
 - `radius_from_facets.py`: computes radius profile `R(x)` from Basilisk facets files.
@@ -84,7 +85,27 @@ python axis_fields.py \
   --output post/axis_fields.dat
 ```
 
-### 5) Run combined Python postprocessing
+### 5) Fit 1 - phiR on the axis
+
+```bash
+python fit_phiR_axis.py \
+  --fields-input output_field/fields.dat \
+  --data-output post/phiR_axis_fit.dat \
+  --plot-output post/phiR_axis_fit.png
+```
+
+Useful options:
+
+- `--f-threshold`: threshold to define `Lj` from the first axis location with `f < threshold` (default `0.5`).
+- `--y-axis`: axis location to sample (default `0.0`).
+- `--delta-min`, `--delta-max`, `--delta-guess`: bounds/initial guess for `Delta` fitting.
+
+Outputs:
+
+- data file with columns: `x`, `f_axis`, `phiR_axis`, `1_minus_phiR`, `fit`
+- plot comparing sampled `1 - phiR` and fitted curve
+
+### 6) Run combined Python postprocessing
 
 ```bash
 python postprocess.py \
